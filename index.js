@@ -1,5 +1,6 @@
 const { addonBuilder } = require('stremio-addon-sdk')
 const crypto = require('crypto')
+const fetch = require('node-fetch')
 
 const manifest = {
     id: 'org.inatbox',
@@ -20,6 +21,7 @@ const AES_KEY = "ywevqtjrurkwtqgz"
 class InatAPI {
     constructor() {
         this.contentUrl = "https://dizibox.rest"
+        console.log('InatAPI initialized with contentUrl:', this.contentUrl)
     }
 
     isDirectStreamUrl(url) {
@@ -27,8 +29,11 @@ class InatAPI {
     }
 
     async makeRequest(url) {
+        console.log('Making request to:', url)
+        
         // Eğer direkt stream URL'i ise, decrypt etmeye çalışma
         if (this.isDirectStreamUrl(url)) {
+            console.log('Direct stream URL detected:', url)
             return { chUrl: url, chName: 'Direct Stream' }
         }
 
@@ -45,19 +50,28 @@ class InatAPI {
         const body = `1=${AES_KEY}&0=${AES_KEY}`
 
         try {
+            console.log('Sending POST request with headers:', headers)
             const response = await fetch(url, {
                 method: 'POST',
                 headers: headers,
                 body: body
             })
 
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+            if (!response.ok) {
+                console.error('HTTP error:', response.status, response.statusText)
+                throw new Error(`HTTP error! status: ${response.status}`)
+            }
+            
             const text = await response.text()
+            console.log('Response received, length:', text.length)
             
             // Yanıt zaten JSON formatında mı kontrol et
             try {
-                return JSON.parse(text)
+                const jsonData = JSON.parse(text)
+                console.log('Response is valid JSON')
+                return jsonData
             } catch {
+                console.log('Response is encrypted, attempting to decrypt')
                 return this.decryptResponse(text)
             }
         } catch (error) {

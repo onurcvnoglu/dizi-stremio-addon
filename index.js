@@ -1,6 +1,7 @@
 const { addonBuilder } = require('stremio-addon-sdk')
 const crypto = require('crypto')
 const fetch = require('node-fetch')
+const https = require('https')
 
 const manifest = {
     id: 'org.inatbox',
@@ -21,6 +22,10 @@ const AES_KEY = "ywevqtjrurkwtqgz"
 class InatAPI {
     constructor() {
         this.contentUrl = "https://dizibox.rest"
+        this.agent = new https.Agent({
+            rejectUnauthorized: false,
+            keepAlive: true
+        })
         console.log('InatAPI initialized with contentUrl:', this.contentUrl)
     }
 
@@ -31,7 +36,6 @@ class InatAPI {
     async makeRequest(url) {
         console.log('Making request to:', url)
         
-        // Eğer direkt stream URL'i ise, decrypt etmeye çalışma
         if (this.isDirectStreamUrl(url)) {
             console.log('Direct stream URL detected:', url)
             return { chUrl: url, chName: 'Direct Stream' }
@@ -42,9 +46,13 @@ class InatAPI {
             'Cache-Control': 'no-cache',
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
             'Host': hostname,
+            'Origin': 'https://speedrestapi.com',
             'Referer': 'https://speedrestapi.com/',
             'X-Requested-With': 'com.bp.box',
-            'User-Agent': 'speedrestapi'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Connection': 'keep-alive'
         }
 
         const body = `1=${AES_KEY}&0=${AES_KEY}`
@@ -54,18 +62,20 @@ class InatAPI {
             const response = await fetch(url, {
                 method: 'POST',
                 headers: headers,
-                body: body
+                body: body,
+                agent: this.agent,
+                timeout: 10000
             })
 
             if (!response.ok) {
                 console.error('HTTP error:', response.status, response.statusText)
+                console.error('Response headers:', response.headers)
                 throw new Error(`HTTP error! status: ${response.status}`)
             }
             
             const text = await response.text()
             console.log('Response received, length:', text.length)
             
-            // Yanıt zaten JSON formatında mı kontrol et
             try {
                 const jsonData = JSON.parse(text)
                 console.log('Response is valid JSON')
@@ -76,6 +86,10 @@ class InatAPI {
             }
         } catch (error) {
             console.error('Request failed:', error)
+            if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT') {
+                console.log('Retrying request after timeout...')
+                return this.makeRequest(url) // Retry once
+            }
             return null
         }
     }

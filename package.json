@@ -1,0 +1,17 @@
+{
+    "name": "stremio-inatbox",
+    "version": "1.0.0",
+    "description": "InatBox Stremio Addon",
+    "main": "index.js",
+    "scripts": {
+        "start": "node server.js",
+        "vercel-build": "echo hello",
+        "dev": "node server.js"
+    },
+    "dependencies": {
+        "stremio-addon-sdk": "^1.6.10"
+    },
+    "engines": {
+        "node": "18.x"
+    }
+}

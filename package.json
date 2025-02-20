@@ -1,18 +1,15 @@
 {
-    "name": "stremio-inatbox",
+    "name": "dizi-stremio-addon",
     "version": "1.0.0",
-    "description": "InatBox Stremio Addon",
-    "main": "server.js",
+    "description": "AnimeciX Stremio Addon",
+    "main": "index.js",
     "scripts": {
-        "start": "node server.js",
-        "vercel-build": "echo hello"
+        "start": "node index.js"
     },
     "dependencies": {
         "stremio-addon-sdk": "^1.6.10",
-        "router": "^1.3.8",
-        "node-fetch": "^2.6.9",
-        "https": "^1.0.0",
-        "cheerio": "^1.0.0-rc.12"
+        "node-fetch": "^2.6.1",
+        "express": "^4.17.1"
     },
     "engines": {
         "node": "18.x"

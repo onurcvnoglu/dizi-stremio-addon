@@ -1,5 +1,6 @@
 const { addonBuilder } = require('stremio-addon-sdk')
 const fetch = require('node-fetch')
+const cheerio = require('cheerio')
 
 const manifest = {
     id: 'org.animecix',
@@ -19,44 +20,24 @@ class AnimeciXAPI {
         this.baseUrl = 'https://animecix.net'
         this.defaultHeaders = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Origin': 'https://animecix.net',
-            'Referer': 'https://animecix.net/',
-            'x-e-h': '7Y2ozlO+QysR5w9Q6Tupmtvl9jJp7ThFH8SB+Lo7NvZjgjqRSqOgcT2v4ISM9sP10LmnlYI8WQ==.xrlyOBFS5BHjQ2Lk',
-            'x-requested-with': 'XMLHttpRequest',
-            'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin'
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
         }
     }
 
-    async makeRequest(url, customHeaders = {}) {
+    async makeRequest(url) {
         try {
             console.log('Making request to:', url)
             const response = await fetch(url, { 
-                headers: { ...this.defaultHeaders, ...customHeaders },
-                credentials: 'include'
+                headers: this.defaultHeaders
             })
             
             if (!response.ok) {
-                console.error('Response headers:', response.headers)
                 console.error('Response status:', response.status)
                 throw new Error(`HTTP error! status: ${response.status}`)
             }
             
-            const text = await response.text()
-            console.log('Response text:', text.substring(0, 200)) // İlk 200 karakteri logla
-            
-            try {
-                return JSON.parse(text)
-            } catch (e) {
-                console.error('JSON parse error:', e)
-                return null
-            }
+            return await response.text()
         } catch (error) {
             console.error('Request failed:', error)
             return null
@@ -64,91 +45,90 @@ class AnimeciXAPI {
     }
 
     async getContent(type, page = 1) {
-        const url = `${this.baseUrl}/api/titles?type=${type}&onlyStreamable=true&page=${page}&perPage=16`
-        const data = await this.makeRequest(url)
-        if (!data?.pagination?.data) return []
+        const url = `${this.baseUrl}/browse?onlyStreamable=true&page=${page}`
+        if (type === 'movie') {
+            url += '&type=movie'
+        }
+            
+        const html = await this.makeRequest(url)
+        if (!html) return []
 
-        return data.pagination.data.map(anime => ({
-            id: `${anime.id}`,
-            type: 'anime',
-            name: anime.title || anime.name,
-            poster: anime.poster
-        }))
-    }
+        const $ = cheerio.load(html)
+        const items = []
 
-    async search(query) {
-        const url = `${this.baseUrl}/api/search/${encodeURIComponent(query)}?limit=20`
-        const data = await this.makeRequest(url)
-        if (!data?.results) return []
+        $('.browse-item').each((i, elem) => {
+            const $item = $(elem)
+            const title = $item.find('.browse-title').text().trim()
+            const href = $item.find('a').attr('href')
+            const id = href ? href.split('/').filter(Boolean).pop() : null
+            const poster = $item.find('img').attr('src')
+            const description = $item.find('.browse-description').text().trim()
 
-        return data.results.map(anime => ({
-            id: `${anime.id}`,
-            type: 'anime',
-            name: anime.title || anime.name,
-            poster: anime.poster
-        }))
+            if (title && id) {
+                items.push({
+                    id,
+                    type: 'anime',
+                    name: title,
+                    poster,
+                    description
+                })
+            }
+        })
+
+        return items
     }
 
     async getAnimeDetails(id) {
-        const url = `${this.baseUrl}/api/titles/${id}`
-        const data = await this.makeRequest(url)
-        if (!data?.title) return null
+        const url = `${this.baseUrl}/titles/${id}`
+        const html = await this.makeRequest(url)
+        if (!html) return null
 
+        const $ = cheerio.load(html)
+        const title = $('.title-name').text().trim()
+        const poster = $('.title-poster img').attr('src')
+        const description = $('.title-description').text().trim()
+        const year = $('.title-year').text().trim()
+        
         const episodes = []
-        if (data.title.title_type === 'anime') {
-            for (const season of data.title.seasons || []) {
-                const seasonData = await this.makeRequest(
-                    `${this.baseUrl}/api/related-videos?episode=1&season=${season.number}&videoId=0&titleId=${id}`
-                )
-                if (seasonData?.videos) {
-                    for (const video of seasonData.videos) {
-                        episodes.push({
-                            id: video.url,
-                            title: `${video.season_num}. Sezon ${video.episode_num}. Bölüm`,
-                            season: video.season_num,
-                            episode: video.episode_num
-                        })
-                    }
-                }
+        $('.episode-box').each((i, elem) => {
+            const $episode = $(elem)
+            const epTitle = $episode.find('.episode-title').text().trim()
+            const epUrl = $episode.find('a').attr('href')
+            const epNum = $episode.find('.episode-number').text().trim()
+            const seasonNum = $episode.find('.season-number').text().trim() || '1'
+
+            if (epUrl) {
+                episodes.push({
+                    id: epUrl,
+                    title: epTitle || `Bölüm ${epNum}`,
+                    season: parseInt(seasonNum),
+                    episode: parseInt(epNum)
+                })
             }
-        } else if (data.title.videos?.length > 0) {
-            episodes.push({
-                id: data.title.videos[0].url,
-                title: 'Filmi İzle',
-                season: 1,
-                episode: 1
-            })
-        }
+        })
 
         return {
-            id: `${data.title.id}`,
+            id,
             type: 'anime',
-            name: data.title.title || data.title.name,
-            poster: data.title.poster,
-            description: data.title.description,
-            year: data.title.year,
-            genres: data.title.tags?.filter(Boolean).map(tag => tag.name) || [],
-            cast: data.title.actors?.filter(Boolean).map(actor => actor.name) || [],
+            name: title,
+            poster,
+            description,
+            year: parseInt(year),
             videos: episodes
         }
     }
 
     async getStreamUrl(url) {
         try {
-            const response = await fetch(`${this.baseUrl}${url.startsWith('/') ? '' : '/'}${url}`, {
-                headers: {
-                    ...this.defaultHeaders,
-                    'Referer': this.baseUrl + '/'
-                },
-                credentials: 'include'
-            })
+            const html = await this.makeRequest(url)
+            if (!html) return null
+
+            const $ = cheerio.load(html)
+            const videoUrl = $('video source').attr('src') || 
+                           $('.video-player iframe').attr('src') ||
+                           $('#video-player').attr('data-url')
             
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-            
-            const finalUrl = response.url
-            console.log('Stream URL:', finalUrl)
-            return finalUrl
-            
+            return videoUrl || null
         } catch (error) {
             console.error('Stream URL request failed:', error)
             return null
@@ -162,7 +142,7 @@ const builder = new addonBuilder(manifest)
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
     console.log('Catalog request:', type, id, extra)
-    const page = extra.skip ? Math.floor(extra.skip / 16) + 1 : 1
+    const page = extra.skip ? Math.floor(extra.skip / 20) + 1 : 1
     
     let metas = []
     if (id === 'animecix-series') {
@@ -188,8 +168,6 @@ builder.defineMetaHandler(async ({ type, id }) => {
             background: data.poster,
             description: data.description,
             year: data.year,
-            genres: data.genres,
-            cast: data.cast,
             videos: data.videos
         }
     }

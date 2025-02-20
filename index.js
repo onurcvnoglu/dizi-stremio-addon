@@ -17,16 +17,46 @@ const manifest = {
 class AnimeciXAPI {
     constructor() {
         this.baseUrl = 'https://animecix.net'
-        this.headers = {
-            'x-e-h': '7Y2ozlO+QysR5w9Q6Tupmtvl9jJp7ThFH8SB+Lo7NvZjgjqRSqOgcT2v4ISM9sP10LmnlYI8WQ==.xrlyOBFS5BHjQ2Lk'
+        this.defaultHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Origin': 'https://animecix.net',
+            'Referer': 'https://animecix.net/',
+            'x-e-h': '7Y2ozlO+QysR5w9Q6Tupmtvl9jJp7ThFH8SB+Lo7NvZjgjqRSqOgcT2v4ISM9sP10LmnlYI8WQ==.xrlyOBFS5BHjQ2Lk',
+            'x-requested-with': 'XMLHttpRequest',
+            'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-origin'
         }
     }
 
-    async makeRequest(url) {
+    async makeRequest(url, customHeaders = {}) {
         try {
-            const response = await fetch(url, { headers: this.headers })
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-            return await response.json()
+            console.log('Making request to:', url)
+            const response = await fetch(url, { 
+                headers: { ...this.defaultHeaders, ...customHeaders },
+                credentials: 'include'
+            })
+            
+            if (!response.ok) {
+                console.error('Response headers:', response.headers)
+                console.error('Response status:', response.status)
+                throw new Error(`HTTP error! status: ${response.status}`)
+            }
+            
+            const text = await response.text()
+            console.log('Response text:', text.substring(0, 200)) // İlk 200 karakteri logla
+            
+            try {
+                return JSON.parse(text)
+            } catch (e) {
+                console.error('JSON parse error:', e)
+                return null
+            }
         } catch (error) {
             console.error('Request failed:', error)
             return null
@@ -34,41 +64,41 @@ class AnimeciXAPI {
     }
 
     async getContent(type, page = 1) {
-        const url = `${this.baseUrl}/secure/titles?type=${type}&onlyStreamable=true&page=${page}&perPage=16`
+        const url = `${this.baseUrl}/api/titles?type=${type}&onlyStreamable=true&page=${page}&perPage=16`
         const data = await this.makeRequest(url)
         if (!data?.pagination?.data) return []
 
         return data.pagination.data.map(anime => ({
             id: `${anime.id}`,
             type: 'anime',
-            name: anime.title,
+            name: anime.title || anime.name,
             poster: anime.poster
         }))
     }
 
     async search(query) {
-        const url = `${this.baseUrl}/secure/search/${encodeURIComponent(query)}?limit=20`
+        const url = `${this.baseUrl}/api/search/${encodeURIComponent(query)}?limit=20`
         const data = await this.makeRequest(url)
         if (!data?.results) return []
 
         return data.results.map(anime => ({
             id: `${anime.id}`,
             type: 'anime',
-            name: anime.title,
+            name: anime.title || anime.name,
             poster: anime.poster
         }))
     }
 
     async getAnimeDetails(id) {
-        const url = `${this.baseUrl}/secure/titles/${id}?titleId=${id}`
+        const url = `${this.baseUrl}/api/titles/${id}`
         const data = await this.makeRequest(url)
         if (!data?.title) return null
 
         const episodes = []
         if (data.title.title_type === 'anime') {
-            for (const season of data.title.seasons) {
+            for (const season of data.title.seasons || []) {
                 const seasonData = await this.makeRequest(
-                    `${this.baseUrl}/secure/related-videos?episode=1&season=${season.number}&videoId=0&titleId=${id}`
+                    `${this.baseUrl}/api/related-videos?episode=1&season=${season.number}&videoId=0&titleId=${id}`
                 )
                 if (seasonData?.videos) {
                     for (const video of seasonData.videos) {
@@ -93,7 +123,7 @@ class AnimeciXAPI {
         return {
             id: `${data.title.id}`,
             type: 'anime',
-            name: data.title.title,
+            name: data.title.title || data.title.name,
             poster: data.title.poster,
             description: data.title.description,
             year: data.title.year,
@@ -105,13 +135,20 @@ class AnimeciXAPI {
 
     async getStreamUrl(url) {
         try {
-            const response = await fetch(`${this.baseUrl}/${url}`, {
+            const response = await fetch(`${this.baseUrl}${url.startsWith('/') ? '' : '/'}${url}`, {
                 headers: {
+                    ...this.defaultHeaders,
                     'Referer': this.baseUrl + '/'
-                }
+                },
+                credentials: 'include'
             })
+            
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
-            return response.url
+            
+            const finalUrl = response.url
+            console.log('Stream URL:', finalUrl)
+            return finalUrl
+            
         } catch (error) {
             console.error('Stream URL request failed:', error)
             return null

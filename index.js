@@ -1,7 +1,7 @@
 const { addonBuilder } = require('stremio-addon-sdk')
 const crypto = require('crypto')
-const fetch = require('node-fetch')
-const https = require('https')
+const cloudscraper = require('cloudscraper')
+const cheerio = require('cheerio')
 
 const manifest = {
     id: 'org.inatbox',
@@ -30,10 +30,6 @@ class InatAPI {
             "https://dizibox.plus"
         ]
         this.contentUrl = this.domains[0]
-        this.agent = new https.Agent({
-            rejectUnauthorized: false,
-            keepAlive: true
-        })
         console.log('InatAPI initialized with contentUrl:', this.contentUrl)
     }
 
@@ -41,16 +37,8 @@ class InatAPI {
         for (const domain of this.domains) {
             try {
                 console.log('Trying domain:', domain)
-                const response = await fetch(`${domain}/yerli-dizi`, {
-                    method: 'GET',
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    },
-                    agent: this.agent,
-                    timeout: 5000
-                })
-                
-                if (response.ok) {
+                const response = await cloudscraper.get(`${domain}/yerli-dizi`)
+                if (response) {
                     console.log('Found working domain:', domain)
                     this.contentUrl = domain
                     return true
@@ -75,73 +63,51 @@ class InatAPI {
             return { chUrl: url, chName: 'Direct Stream' }
         }
 
-        const headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/json, text/html, */*',
-            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Referer': this.contentUrl,
-            'Origin': this.contentUrl
-        }
-
         try {
-            console.log('Sending GET request with headers:', headers)
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: headers,
-                agent: this.agent,
-                timeout: 10000
+            console.log('Sending request to:', url)
+            const response = await cloudscraper.get(url, {
+                headers: {
+                    'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
+                }
             })
-
-            if (!response.ok) {
-                console.error('HTTP error:', response.status, response.statusText)
-                console.error('Response headers:', response.headers)
-                throw new Error(`HTTP error! status: ${response.status}`)
-            }
             
-            const text = await response.text()
-            console.log('Response received, length:', text.length)
+            console.log('Response received, length:', response.length)
             
             // HTML yanıtından gerekli bilgileri çıkar
-            const items = this.parseHtmlResponse(text)
+            const items = this.parseHtmlResponse(response)
             return items
             
         } catch (error) {
             console.error('Request failed:', error)
-            if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT') {
-                console.log('Retrying request after timeout...')
-                return this.makeRequest(url)
-            }
             return null
         }
     }
 
     parseHtmlResponse(html) {
         const items = []
+        const $ = cheerio.load(html)
         
-        // Basit HTML parsing
-        const matches = html.match(/<div class="film-item"[\s\S]*?<\/div>/g) || []
-        
-        for (const match of matches) {
+        // Film/dizi kartlarını bul
+        $('.film-item').each((i, elem) => {
             try {
-                const nameMatch = match.match(/title="([^"]+)"/)
-                const urlMatch = match.match(/href="([^"]+)"/)
-                const imgMatch = match.match(/src="([^"]+)"/)
-                const detailMatch = match.match(/<div class="film-description">([^<]+)<\/div>/)
+                const $elem = $(elem)
+                const name = $elem.find('a').attr('title')
+                const url = $elem.find('a').attr('href')
+                const img = $elem.find('img').attr('src')
+                const detail = $elem.find('.film-description').text()
                 
-                if (nameMatch && urlMatch) {
+                if (name && url) {
                     items.push({
-                        diziName: nameMatch[1],
-                        diziUrl: urlMatch[1].startsWith('http') ? urlMatch[1] : this.contentUrl + urlMatch[1],
-                        diziImg: imgMatch ? imgMatch[1] : '',
-                        diziDetay: detailMatch ? detailMatch[1].trim() : ''
+                        diziName: name,
+                        diziUrl: url.startsWith('http') ? url : this.contentUrl + url,
+                        diziImg: img || '',
+                        diziDetay: detail ? detail.trim() : ''
                     })
                 }
             } catch (error) {
                 console.error('Error parsing item:', error)
             }
-        }
+        })
         
         return items
     }

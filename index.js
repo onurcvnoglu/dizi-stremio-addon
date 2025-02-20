@@ -45,10 +45,7 @@ class AnimeciXAPI {
     }
 
     async getContent(type, page = 1) {
-        const url = `${this.baseUrl}/browse?onlyStreamable=true&page=${page}`
-        if (type === 'movie') {
-            url += '&type=movie'
-        }
+        const url = `${this.baseUrl}/browse?onlyStreamable=true&page=${page}${type === 'movie' ? '&type=movie' : ''}`
             
         const html = await this.makeRequest(url)
         if (!html) return []

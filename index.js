@@ -1,334 +1,176 @@
 const { addonBuilder } = require('stremio-addon-sdk')
-const crypto = require('crypto')
-const cheerio = require('cheerio')
-const chromium = require('chrome-aws-lambda')
+const fetch = require('node-fetch')
 
 const manifest = {
-    id: 'org.inatbox',
+    id: 'org.animecix',
     version: '1.0.0',
-    name: 'InatBox',
-    description: 'InatBox içeriklerini Stremio\'da izleyin',
+    name: 'AnimeciX',
+    description: 'AnimeciX içeriklerini Stremio\'da izleyin',
     resources: ['stream', 'catalog', 'meta'],
-    types: ['movie', 'series', 'tv'],
+    types: ['anime'],
     catalogs: [
-        { type: 'movie', id: 'inatbox-movies' },
-        { type: 'series', id: 'inatbox-series' },
-        { type: 'tv', id: 'inatbox-tv' }
+        { type: 'anime', id: 'animecix-series' },
+        { type: 'anime', id: 'animecix-movies' }
     ]
 }
 
-const AES_KEY = "ywevqtjrurkwtqgz"
-
-class InatAPI {
+class AnimeciXAPI {
     constructor() {
-        this.domains = [
-            "https://dizibox.tv",
-            "https://www.dizibox.vip",
-            "https://dizibox.cloud",
-            "https://www.dizibox.watch",
-            "https://dizibox.plus"
-        ]
-        this.contentUrl = this.domains[0]
-        this.browser = null
-        console.log('InatAPI initialized with contentUrl:', this.contentUrl)
-    }
-
-    async initBrowser() {
-        if (!this.browser) {
-            console.log('Launching browser...')
-            this.browser = await chromium.puppeteer.launch({
-                args: chromium.args,
-                defaultViewport: chromium.defaultViewport,
-                executablePath: await chromium.executablePath,
-                headless: true,
-                ignoreHTTPSErrors: true
-            })
-            console.log('Browser launched')
+        this.baseUrl = 'https://animecix.net'
+        this.headers = {
+            'x-e-h': '7Y2ozlO+QysR5w9Q6Tupmtvl9jJp7ThFH8SB+Lo7NvZjgjqRSqOgcT2v4ISM9sP10LmnlYI8WQ==.xrlyOBFS5BHjQ2Lk'
         }
-        return this.browser
-    }
-
-    async findWorkingDomain() {
-        const browser = await this.initBrowser()
-        const page = await browser.newPage()
-        
-        for (const domain of this.domains) {
-            try {
-                console.log('Trying domain:', domain)
-                await page.goto(`${domain}/yerli-dizi`, {
-                    waitUntil: 'networkidle0',
-                    timeout: 30000
-                })
-                
-                // Cloudflare bypass kontrolü
-                await page.waitForFunction(() => !document.querySelector('.cf-browser-verification'), { timeout: 30000 })
-                
-                console.log('Found working domain:', domain)
-                this.contentUrl = domain
-                await page.close()
-                return true
-            } catch (error) {
-                console.log('Domain failed:', domain, error.message)
-                continue
-            }
-        }
-        await page.close()
-        return false
     }
 
     async makeRequest(url) {
-        console.log('Making request to:', url)
-        
-        if (this.isDirectStreamUrl(url)) {
-            console.log('Direct stream URL detected:', url)
-            return { chUrl: url, chName: 'Direct Stream' }
-        }
-
-        const browser = await this.initBrowser()
-        const page = await browser.newPage()
-        
         try {
-            await page.goto(url, {
-                waitUntil: 'networkidle0',
-                timeout: 30000
-            })
-            
-            // Cloudflare bypass kontrolü
-            await page.waitForFunction(() => !document.querySelector('.cf-browser-verification'), { timeout: 30000 })
-            
-            const content = await page.content()
-            const items = this.parseHtmlResponse(content)
-            
-            await page.close()
-            return items
+            const response = await fetch(url, { headers: this.headers })
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+            return await response.json()
         } catch (error) {
             console.error('Request failed:', error)
-            await page.close()
             return null
         }
     }
 
-    isDirectStreamUrl(url) {
-        return url.includes('.m3u8') || url.includes('.mp4')
-    }
-
-    parseHtmlResponse(html) {
-        const items = []
-        const $ = cheerio.load(html)
-        
-        // Film/dizi kartlarını bul
-        $('.film-item').each((i, elem) => {
-            try {
-                const $elem = $(elem)
-                const name = $elem.find('a').attr('title')
-                const url = $elem.find('a').attr('href')
-                const img = $elem.find('img').attr('src')
-                const detail = $elem.find('.film-description').text()
-                
-                if (name && url) {
-                    items.push({
-                        diziName: name,
-                        diziUrl: url.startsWith('http') ? url : this.contentUrl + url,
-                        diziImg: img || '',
-                        diziDetay: detail ? detail.trim() : ''
-                    })
-                }
-            } catch (error) {
-                console.error('Error parsing item:', error)
-            }
-        })
-        
-        return items
-    }
-
-    decryptResponse(encryptedText) {
-        try {
-            if (!encryptedText.includes(':')) {
-                throw new Error('Invalid encrypted text format')
-            }
-
-            const parts = encryptedText.split(':')
-            const iv = Buffer.from(AES_KEY)
-            
-            // First decryption
-            const decipher1 = crypto.createDecipheriv('aes-128-cbc', Buffer.from(AES_KEY), iv)
-            let decrypted1 = decipher1.update(Buffer.from(parts[0], 'base64'))
-            decrypted1 = Buffer.concat([decrypted1, decipher1.final()])
-            
-            // Second decryption
-            const innerParts = decrypted1.toString().split(':')
-            const decipher2 = crypto.createDecipheriv('aes-128-cbc', Buffer.from(AES_KEY), iv)
-            let decrypted2 = decipher2.update(Buffer.from(innerParts[0], 'base64'))
-            decrypted2 = Buffer.concat([decrypted2, decipher2.final()])
-            
-            return JSON.parse(decrypted2.toString())
-        } catch (error) {
-            console.error('Decryption failed:', error)
-            return null
-        }
-    }
-
-    async getContent(type) {
-        // Çalışan domain'i bul
-        await this.findWorkingDomain()
-        
-        let url
-        switch(type) {
-            case 'movie':
-                url = `${this.contentUrl}/film/yerli-filmler`
-                break
-            case 'series':
-                url = `${this.contentUrl}/yerli-dizi`
-                break
-            case 'tv':
-                url = `${this.contentUrl}/tv/ulusal`
-                break
-            default:
-                throw new Error('Invalid content type')
-        }
-
-        console.log('Fetching content from:', url)
+    async getContent(type, page = 1) {
+        const url = `${this.baseUrl}/secure/titles?type=${type}&onlyStreamable=true&page=${page}&perPage=16`
         const data = await this.makeRequest(url)
-        return data
+        if (!data?.pagination?.data) return []
+
+        return data.pagination.data.map(anime => ({
+            id: `${anime.id}`,
+            type: 'anime',
+            name: anime.title,
+            poster: anime.poster
+        }))
     }
 
-    async getStreamUrls(contentUrl) {
+    async search(query) {
+        const url = `${this.baseUrl}/secure/search/${encodeURIComponent(query)}?limit=20`
+        const data = await this.makeRequest(url)
+        if (!data?.results) return []
+
+        return data.results.map(anime => ({
+            id: `${anime.id}`,
+            type: 'anime',
+            name: anime.title,
+            poster: anime.poster
+        }))
+    }
+
+    async getAnimeDetails(id) {
+        const url = `${this.baseUrl}/secure/titles/${id}?titleId=${id}`
+        const data = await this.makeRequest(url)
+        if (!data?.title) return null
+
+        const episodes = []
+        if (data.title.title_type === 'anime') {
+            for (const season of data.title.seasons) {
+                const seasonData = await this.makeRequest(
+                    `${this.baseUrl}/secure/related-videos?episode=1&season=${season.number}&videoId=0&titleId=${id}`
+                )
+                if (seasonData?.videos) {
+                    for (const video of seasonData.videos) {
+                        episodes.push({
+                            id: video.url,
+                            title: `${video.season_num}. Sezon ${video.episode_num}. Bölüm`,
+                            season: video.season_num,
+                            episode: video.episode_num
+                        })
+                    }
+                }
+            }
+        } else if (data.title.videos?.length > 0) {
+            episodes.push({
+                id: data.title.videos[0].url,
+                title: 'Filmi İzle',
+                season: 1,
+                episode: 1
+            })
+        }
+
+        return {
+            id: `${data.title.id}`,
+            type: 'anime',
+            name: data.title.title,
+            poster: data.title.poster,
+            description: data.title.description,
+            year: data.title.year,
+            genres: data.title.tags?.filter(Boolean).map(tag => tag.name) || [],
+            cast: data.title.actors?.filter(Boolean).map(actor => actor.name) || [],
+            videos: episodes
+        }
+    }
+
+    async getStreamUrl(url) {
         try {
-            const data = await this.makeRequest(contentUrl)
-            if (!data) return []
-
-            let streams = []
-
-            const processItem = async (item) => {
-                if (!item) return
-
-                // Direkt stream URL'i varsa
-                if (item.chUrl && this.isDirectStreamUrl(item.chUrl)) {
-                    streams.push({
-                        title: item.chName || 'Stream',
-                        url: item.chUrl
-                    })
-                    return
+            const response = await fetch(`${this.baseUrl}/${url}`, {
+                headers: {
+                    'Referer': this.baseUrl + '/'
                 }
-
-                // Alt kaynak URL'i varsa
-                if (item.chUrl) {
-                    const subData = await this.makeRequest(item.chUrl)
-                    
-                    if (Array.isArray(subData)) {
-                        for (const subItem of subData) {
-                            await processItem(subItem)
-                        }
-                    } else if (subData) {
-                        await processItem(subData)
-                    }
-                }
-
-                // Dizi bölümleri varsa
-                if (item.diziUrl) {
-                    const episodeData = await this.makeRequest(item.diziUrl)
-                    if (Array.isArray(episodeData)) {
-                        for (const episode of episodeData) {
-                            await processItem(episode)
-                        }
-                    }
-                }
-            }
-
-            if (Array.isArray(data)) {
-                for (const item of data) {
-                    await processItem(item)
-                }
-            } else {
-                await processItem(data)
-            }
-
-            return streams
-
+            })
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+            return response.url
         } catch (error) {
-            console.error('getStreamUrls error:', error)
-            return []
+            console.error('Stream URL request failed:', error)
+            return null
         }
     }
 }
 
-const inatAPI = new InatAPI()
+const api = new AnimeciXAPI()
 
 const builder = new addonBuilder(manifest)
 
-builder.defineCatalogHandler(async ({ type, id }) => {
-    console.log('Catalog request for type:', type)
-    const data = await inatAPI.getContent(type)
-    if (!data) return { metas: [] }
-
-    const metas = data.map(item => {
-        const id = item.diziUrl || item.chUrl
-        const name = item.diziName || item.chName
-        const poster = item.diziImg || item.chImg
-        
-        console.log(`Processing item: ${name} - ${id}`)
-        
-        return {
-            id: id,
-            type: type,
-            name: name,
-            poster: poster,
-            description: item.diziDetay || ''
-        }
-    })
+builder.defineCatalogHandler(async ({ type, id, extra }) => {
+    console.log('Catalog request:', type, id, extra)
+    const page = extra.skip ? Math.floor(extra.skip / 16) + 1 : 1
+    
+    let metas = []
+    if (id === 'animecix-series') {
+        metas = await api.getContent('series', page)
+    } else if (id === 'animecix-movies') {
+        metas = await api.getContent('movie', page)
+    }
 
     return { metas }
 })
 
 builder.defineMetaHandler(async ({ type, id }) => {
-    console.log('Meta request for:', id)
-    try {
-        const data = await inatAPI.makeRequest(id)
-        if (!data) return { meta: null }
+    console.log('Meta request for:', type, id)
+    const data = await api.getAnimeDetails(id)
+    if (!data) return { meta: null }
 
-        const meta = {
-            id: id,
-            type: type,
-            name: data.diziName || data.chName,
-            poster: data.diziImg || data.chImg,
-            description: data.diziDetay || ''
+    return {
+        meta: {
+            id: data.id,
+            type: data.type,
+            name: data.name,
+            poster: data.poster,
+            background: data.poster,
+            description: data.description,
+            year: data.year,
+            genres: data.genres,
+            cast: data.cast,
+            videos: data.videos
         }
-
-        // Diziler için sezon ve bölüm bilgisini ekle
-        if (type === 'series' && Array.isArray(data)) {
-            meta.videos = data.map((episode, index) => ({
-                id: episode.chUrl,
-                title: episode.chName,
-                season: 1,
-                episode: index + 1
-            }))
-        }
-
-        return { meta }
-    } catch (error) {
-        console.error('Meta handler error:', error)
-        return { meta: null }
     }
 })
 
 builder.defineStreamHandler(async ({ type, id }) => {
     console.log('Stream request for:', id)
-    try {
-        const streams = await inatAPI.getStreamUrls(id)
-        console.log('Found streams:', streams)
-        
-        return {
-            streams: streams.map(stream => ({
-                title: stream.title,
-                url: stream.url,
-                behaviorHints: {
-                    notWebReady: true
-                }
-            }))
-        }
-    } catch (error) {
-        console.error('Stream handler error:', error)
-        return { streams: [] }
+    const streamUrl = await api.getStreamUrl(id)
+    if (!streamUrl) return { streams: [] }
+
+    return {
+        streams: [{
+            title: 'AnimeciX',
+            url: streamUrl,
+            behaviorHints: {
+                notWebReady: true
+            }
+        }]
     }
 })
 

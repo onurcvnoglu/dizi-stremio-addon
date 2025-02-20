@@ -21,12 +21,46 @@ const AES_KEY = "ywevqtjrurkwtqgz"
 
 class InatAPI {
     constructor() {
-        this.contentUrl = "https://dizibox.rest"
+        // Ana domain ve yedek domainler
+        this.domains = [
+            "https://dizibox.tv",
+            "https://www.dizibox.vip",
+            "https://dizibox.cloud",
+            "https://www.dizibox.watch",
+            "https://dizibox.plus"
+        ]
+        this.contentUrl = this.domains[0]
         this.agent = new https.Agent({
             rejectUnauthorized: false,
             keepAlive: true
         })
         console.log('InatAPI initialized with contentUrl:', this.contentUrl)
+    }
+
+    async findWorkingDomain() {
+        for (const domain of this.domains) {
+            try {
+                console.log('Trying domain:', domain)
+                const response = await fetch(`${domain}/yerli-dizi`, {
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    },
+                    agent: this.agent,
+                    timeout: 5000
+                })
+                
+                if (response.ok) {
+                    console.log('Found working domain:', domain)
+                    this.contentUrl = domain
+                    return true
+                }
+            } catch (error) {
+                console.log('Domain failed:', domain, error.message)
+                continue
+            }
+        }
+        return false
     }
 
     isDirectStreamUrl(url) {
@@ -41,28 +75,21 @@ class InatAPI {
             return { chUrl: url, chName: 'Direct Stream' }
         }
 
-        const hostname = new URL(url).hostname
         const headers = {
-            'Cache-Control': 'no-cache',
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'Host': hostname,
-            'Origin': 'https://speedrestapi.com',
-            'Referer': 'https://speedrestapi.com/',
-            'X-Requested-With': 'com.bp.box',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
+            'Accept': 'application/json, text/html, */*',
             'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Connection': 'keep-alive'
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Referer': this.contentUrl,
+            'Origin': this.contentUrl
         }
 
-        const body = `1=${AES_KEY}&0=${AES_KEY}`
-
         try {
-            console.log('Sending POST request with headers:', headers)
+            console.log('Sending GET request with headers:', headers)
             const response = await fetch(url, {
-                method: 'POST',
+                method: 'GET',
                 headers: headers,
-                body: body,
                 agent: this.agent,
                 timeout: 10000
             })
@@ -76,22 +103,47 @@ class InatAPI {
             const text = await response.text()
             console.log('Response received, length:', text.length)
             
-            try {
-                const jsonData = JSON.parse(text)
-                console.log('Response is valid JSON')
-                return jsonData
-            } catch {
-                console.log('Response is encrypted, attempting to decrypt')
-                return this.decryptResponse(text)
-            }
+            // HTML yanıtından gerekli bilgileri çıkar
+            const items = this.parseHtmlResponse(text)
+            return items
+            
         } catch (error) {
             console.error('Request failed:', error)
             if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT') {
                 console.log('Retrying request after timeout...')
-                return this.makeRequest(url) // Retry once
+                return this.makeRequest(url)
             }
             return null
         }
+    }
+
+    parseHtmlResponse(html) {
+        const items = []
+        
+        // Basit HTML parsing
+        const matches = html.match(/<div class="film-item"[\s\S]*?<\/div>/g) || []
+        
+        for (const match of matches) {
+            try {
+                const nameMatch = match.match(/title="([^"]+)"/)
+                const urlMatch = match.match(/href="([^"]+)"/)
+                const imgMatch = match.match(/src="([^"]+)"/)
+                const detailMatch = match.match(/<div class="film-description">([^<]+)<\/div>/)
+                
+                if (nameMatch && urlMatch) {
+                    items.push({
+                        diziName: nameMatch[1],
+                        diziUrl: urlMatch[1].startsWith('http') ? urlMatch[1] : this.contentUrl + urlMatch[1],
+                        diziImg: imgMatch ? imgMatch[1] : '',
+                        diziDetay: detailMatch ? detailMatch[1].trim() : ''
+                    })
+                }
+            } catch (error) {
+                console.error('Error parsing item:', error)
+            }
+        }
+        
+        return items
     }
 
     decryptResponse(encryptedText) {
@@ -122,21 +174,25 @@ class InatAPI {
     }
 
     async getContent(type) {
+        // Çalışan domain'i bul
+        await this.findWorkingDomain()
+        
         let url
         switch(type) {
             case 'movie':
-                url = `${this.contentUrl}/film/yerli-filmler.php`
+                url = `${this.contentUrl}/film/yerli-filmler`
                 break
             case 'series':
-                url = `${this.contentUrl}/yerli-dizi/index.php`
+                url = `${this.contentUrl}/yerli-dizi`
                 break
             case 'tv':
-                url = `${this.contentUrl}/tv/ulusal.php`
+                url = `${this.contentUrl}/tv/ulusal`
                 break
             default:
                 throw new Error('Invalid content type')
         }
 
+        console.log('Fetching content from:', url)
         const data = await this.makeRequest(url)
         return data
     }

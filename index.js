@@ -1,7 +1,7 @@
 const { addonBuilder } = require('stremio-addon-sdk')
 const crypto = require('crypto')
-const cloudscraper = require('cloudscraper')
 const cheerio = require('cheerio')
+const chromium = require('chrome-aws-lambda')
 
 const manifest = {
     id: 'org.inatbox',
@@ -21,7 +21,6 @@ const AES_KEY = "ywevqtjrurkwtqgz"
 
 class InatAPI {
     constructor() {
-        // Ana domain ve yedek domainler
         this.domains = [
             "https://dizibox.tv",
             "https://www.dizibox.vip",
@@ -30,29 +29,51 @@ class InatAPI {
             "https://dizibox.plus"
         ]
         this.contentUrl = this.domains[0]
+        this.browser = null
         console.log('InatAPI initialized with contentUrl:', this.contentUrl)
     }
 
+    async initBrowser() {
+        if (!this.browser) {
+            console.log('Launching browser...')
+            this.browser = await chromium.puppeteer.launch({
+                args: chromium.args,
+                defaultViewport: chromium.defaultViewport,
+                executablePath: await chromium.executablePath,
+                headless: true,
+                ignoreHTTPSErrors: true
+            })
+            console.log('Browser launched')
+        }
+        return this.browser
+    }
+
     async findWorkingDomain() {
+        const browser = await this.initBrowser()
+        const page = await browser.newPage()
+        
         for (const domain of this.domains) {
             try {
                 console.log('Trying domain:', domain)
-                const response = await cloudscraper.get(`${domain}/yerli-dizi`)
-                if (response) {
-                    console.log('Found working domain:', domain)
-                    this.contentUrl = domain
-                    return true
-                }
+                await page.goto(`${domain}/yerli-dizi`, {
+                    waitUntil: 'networkidle0',
+                    timeout: 30000
+                })
+                
+                // Cloudflare bypass kontrolü
+                await page.waitForFunction(() => !document.querySelector('.cf-browser-verification'), { timeout: 30000 })
+                
+                console.log('Found working domain:', domain)
+                this.contentUrl = domain
+                await page.close()
+                return true
             } catch (error) {
                 console.log('Domain failed:', domain, error.message)
                 continue
             }
         }
+        await page.close()
         return false
-    }
-
-    isDirectStreamUrl(url) {
-        return url.includes('.m3u8') || url.includes('.mp4')
     }
 
     async makeRequest(url) {
@@ -63,24 +84,32 @@ class InatAPI {
             return { chUrl: url, chName: 'Direct Stream' }
         }
 
+        const browser = await this.initBrowser()
+        const page = await browser.newPage()
+        
         try {
-            console.log('Sending request to:', url)
-            const response = await cloudscraper.get(url, {
-                headers: {
-                    'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
-                }
+            await page.goto(url, {
+                waitUntil: 'networkidle0',
+                timeout: 30000
             })
             
-            console.log('Response received, length:', response.length)
+            // Cloudflare bypass kontrolü
+            await page.waitForFunction(() => !document.querySelector('.cf-browser-verification'), { timeout: 30000 })
             
-            // HTML yanıtından gerekli bilgileri çıkar
-            const items = this.parseHtmlResponse(response)
+            const content = await page.content()
+            const items = this.parseHtmlResponse(content)
+            
+            await page.close()
             return items
-            
         } catch (error) {
             console.error('Request failed:', error)
+            await page.close()
             return null
         }
+    }
+
+    isDirectStreamUrl(url) {
+        return url.includes('.m3u8') || url.includes('.mp4')
     }
 
     parseHtmlResponse(html) {
